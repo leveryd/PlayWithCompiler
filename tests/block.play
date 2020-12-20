@@ -1,0 +1,12 @@
+{
+    int a=1;
+    {
+        a = 2;
+        snoopy_print(a);   // 2
+    }
+
+    {
+        int a = 3;
+        snoopy_print(a);   // 3
+    }
+}

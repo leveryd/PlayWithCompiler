@@ -1,0 +1,35 @@
+// 1. 支持递归
+// 2. 支持返回值
+// 3. 支持函数作用域
+
+{
+    int a=2+3;
+    int b=3+5*2;
+
+    // 1. 支持递归
+    int x(int a)
+    {
+        a = a+1;
+        if(a-5){
+            return ;
+        }
+
+        snoopy_print(a);
+
+        x(a);
+    }
+
+    // 2. 支持返回值
+    int y(int a){
+        return a+1;
+    }
+
+    // 3. 支持函数作用域
+    int z(int a){
+        snoopy_print(a);
+    }
+
+    x(0);
+    // snoopy_print(y(2));   // 3
+    // z(2);   //  2
+}

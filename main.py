@@ -1,6 +1,6 @@
 #!/usr/bin/python2
 # coding:utf-8
-import random
+import copy
 from antlr4 import *
 from dist.PlayScriptLexer import PlayScriptLexer
 from dist.PlayScriptParser import PlayScriptParser
@@ -8,22 +8,16 @@ from dist.PlayScriptVisitor import PlayScriptVisitor
 from dist.PlayScriptListener import PlayScriptListener
 
 
-vars_list = {}
-
-map_node_scope = {}
-
-
-class TmpCtx(object):
-    def __init__(self, ctx):
-        self.parentCtx = ctx
-        self.index = random.randint(0, 1000)
-
-    def __str__(self):
-        return "tmpCtx " + str(self.index)
+class RETURN(object):
+    def __init__(self, value):
+        """
+        :param value:
+        """
+        self.value = value
 
 
-class NodeScopeMap(object):   # 因为map_node_scope key是ctx对象时有点问题，所以用此类代替
-    node_scope_list = []
+class NodeScopeMap(object):
+    node_scope_list = []  # [(nodeCtx1, scope1), (nodeCtx2, scope2)]
 
     @classmethod
     def get(cls, ctx):
@@ -47,10 +41,10 @@ class NodeScopeMap(object):   # 因为map_node_scope key是ctx对象时有点问
 
 
 class Scope(object):
-    def __init__(self, parent_scope, symbol_list):
+    def __init__(self, parent_scope, symbol_list, name=""):
         self.parent_scope = parent_scope
         self.symbol_list = symbol_list
-        self.name = ""
+        self.name = name
 
     def add_symbol(self, symbol):
         """
@@ -68,6 +62,9 @@ class Scope(object):
             if symbol.name == name:
                 return symbol
         return None
+
+    def __str__(self):
+        return self.name
 
 
 class Symbol(object):
@@ -124,7 +121,13 @@ class Annotated(object):
         :param scope:
         :return:
         """
-        cls.scope_list.append(scope)
+        # 在递归调用函数时，如果没有copy scope，就有可能造成死循环
+        # block -> function_call_scope -> function_block_scope -> function_call_scope
+        # function_call_scope -> function_block_scope -> function_call_scope 死循环
+        tmp_scope = copy.copy(scope)
+        if len(cls.scope_list) > 0:
+            tmp_scope.parent_scope = cls.scope_list[-1]   # 强行指定scope的栈的关系
+        cls.scope_list.append(tmp_scope)
 
     @classmethod
     def pop_scope(cls):
@@ -159,9 +162,9 @@ class PlayVisitor(PlayScriptVisitor):
         ret = None
         for i in ctx.blockStatement():
             ret = self.visitBlockStatement(i)
-            if i.statement() is not None:
-                if i.statement().RETURN() is not None:
-                    return ret
+
+            if isinstance(ret, RETURN):
+                return ret    # 必须要将RETURN对象传出去，递归调用时才能停止
         return ret
 
     def visitBlockStatement(self, ctx):
@@ -207,23 +210,49 @@ class PlayVisitor(PlayScriptVisitor):
         return ctx.primitiveType().getText()
 
     def visitStatement(self, ctx):
-        if ctx.block() is not None:
-            return self.visitBlock(ctx.block())
-        if ctx.RETURN() is not None:
-            if ctx.expression() is None:
-                return None
-            else:
-                return self.visitExpression(ctx.expression())
-        else:
-            return self.visitExpression(ctx.statementExpression)
-
-    def visitBlock(self, ctx):
         """
         :param ctx:
         :return:
         """
-        # if ctx.parentCtx is not None and ctx.parentCtx.parentCtx:  # 如果
-        return self.visitBlockStatements(ctx.blockStatements())
+        if ctx.block() is not None:
+            return self.visitBlock(ctx.block())
+        if ctx.RETURN() is not None:
+            if ctx.expression() is None:
+                return RETURN(None)
+            else:
+                ret_value = self.visitExpression(ctx.expression())
+                return RETURN(ret_value)
+        elif ctx.IF() is not None:
+            e = self.visitParExpression(ctx.parExpression())
+            if isinstance(e, VariableSymbol):
+                e = int(e.value)
+            else:
+                e = int(e)
+            if e >= 0:
+                return self.visitStatement(ctx.statement()[0])
+        else:
+            return self.visitExpression(ctx.statementExpression)
+
+    def visitParExpression(self, ctx):
+        """
+        :param ctx:
+        :return:
+        """
+        return self.visitExpression(ctx.expression())
+
+    def visitBlock(self, ctx):
+        """
+        1. 进入块后要实现当前的作用域栈
+        :param ctx:
+        :return:
+        """
+        s = NodeScopeMap.get(ctx)
+        Annotated.push_scope(s)
+
+        ret = self.visitBlockStatements(ctx.blockStatements())
+
+        Annotated.pop_scope()
+        return ret
 
     def visitExpression(self, ctx):
         if ctx.primary() is not None:
@@ -243,9 +272,6 @@ class PlayVisitor(PlayScriptVisitor):
 
             return eval("%d%s%d" % (l_value, ctx.bop.text, r_value))
         elif ctx.bop is not None and ctx.bop.text == "=":
-            # ll = ctx.expression(0).getText()
-            # rr = self.visit(ctx.expression(1))
-            # vars_list[ll] = rr
             symbol = self.visit(ctx.expression(0))
             symbol.value = int(self.visit(ctx.expression(1)))
             return None
@@ -261,18 +287,16 @@ class PlayVisitor(PlayScriptVisitor):
         if ctx.literal() is not None:
             return ctx.getText()
         else:  # 暂时全部当作变量
-            parent_ctx = ctx
             # 一直向父节点的scope寻找到变量，直到没有父节点
+            current_scope = Annotated.get_stack_top()
             while True:
-                current_scope = NodeScopeMap.get(parent_ctx)
+
                 if current_scope is None:
-                    parent_ctx = parent_ctx.parentCtx
-                    if parent_ctx is None:
-                        break
+                    return None   # 没有找到变量
                 else:
                     symbol = current_scope.get_symbol_by_name(ctx.getText())
                     if symbol is None:
-                        parent_ctx = parent_ctx.parentCtx
+                        current_scope = current_scope.parent_scope
                     else:
                         return symbol
 
@@ -304,22 +328,17 @@ class PlayVisitor(PlayScriptVisitor):
                     print(tuple(ret))
             else:
                 # 一直向父节点的scope寻找到函数，直到没有父节点
-                parent_ctx = ctx
+                current_scope = Annotated.get_stack_top()
 
                 while True:
-                    current_scope = NodeScopeMap.get(parent_ctx)
-                    # print(str(type(parent_ctx)))
-                    if isinstance(parent_ctx, TmpCtx):
-                        print(parent_ctx)
+                    # print(current_scope)
 
                     if current_scope is None:
-                        parent_ctx = parent_ctx.parentCtx
-                        if parent_ctx is None:
-                            break
+                        return None
                     else:
                         symbol = current_scope.get_symbol_by_name(ctx.IDENTIFIER().getText())
                         if symbol is None:
-                            parent_ctx = parent_ctx.parentCtx
+                            current_scope = current_scope.parent_scope
                         else:
                             # symbol 找到的函数符号
 
@@ -334,53 +353,15 @@ class PlayVisitor(PlayScriptVisitor):
                                 else:
                                     v = arguments_values[i]
                                 argument.value = v
-                            current_scope = Annotated.get_stack_top()  # 当前的作用域当作函数的父域
-                            new_scope = Scope(current_scope, arguments)  # 将参数符号放到函数域
+                            current_stack_top_scope = Annotated.get_stack_top()  # 当前的作用域当作函数的父域
+
+                            # block -> new_scope1 -> function_block -> new_scope2 -> function_block
+                            import random
+                            r_str = str(random.randint(0, 10000))
+                            new_scope = Scope(current_stack_top_scope, arguments, "xxx" + r_str)  # 将参数符号放到函数域
                             Annotated.push_scope(new_scope)  # 函数域到栈顶
 
-                            # 递归时的作用域数据结构
-                            # 第一次调用函数时
-                            # prog -> block -> statement -> expression -> functionCall
-                            # functionBody.parentCtx -> tmp_ctx1 -> functionCallCtx
-
-                            # functionBody -> block -> statement -> expression -> functionCall
-                            # functionBody.parentCtx -> tmp_ctx1 -> functionCallCtx
-
-                            # functionBody -> block -> statement -> expression -> functionCall
-                            # functionBody.parentCtx -> tmp_ctx1 -> functionCallCtx
-
-                            # functionBody -> block -> statement -> expression -> functionCall
-
-                            # Annotated.scope_list = [scope0, tmp_scope1]
-                            # node_scope_list = [(main_block0, scope0), (tmp_ctx1, tmp_scope1)]
-                            # functionbody.parentCtx = tmp_ctx1
-                            # tmp_ctx1.parentCtx = functioncallCtx
-                            # functioncallCtx.parentCtx -> mainBlock
-
-                            # 第一次递归时调用函数时
-                            # functionBody -> block -> statement -> expression -> functionCall
-
-                            # Annotated.scope_list = [scope0, tmp_scope1, tmp_scope2]
-                            # node_scope_list = [(block0, scope0), (tmp_ctx1, tmp_scope1), (tmp_ctx2, tmp_scope2)]
-                            # functionbody.parentCtx = tmp_ctx2
-                            # tmp_ctx2.parentCtx = functioncallCtx
-                            # functioncallCtx -> expression -> statenment ->.. ->  -> functionDeclaration ->
-
-                            # 虚拟的中间ctx,这里实现得有些问题
-                            tmp_ctx = TmpCtx(ctx)
-
-                            NodeScopeMap.set(tmp_ctx, new_scope)
-                            # NodeScopeMap.set(ctx, current_scope)
-
-                            # 3. 解析函数block
-
-                            # 将调用函数body的父亲节点改成当前节点，以便函数body找变量
-                            # 这里实现得也有问题
-                            # symbol.body_ctx.parentCtx = tmp_ctx
-                            import copy
-                            copy_body_ctx = copy.copy(symbol.body_ctx)
-                            copy_body_ctx.parentCtx = tmp_ctx    # 为了递归调用,所以使用copy.copy
-                            return self.visitFunctionBody(copy_body_ctx)
+                            return self.visitFunctionBody(symbol.body_ctx)
 
     def visitFunctionBody(self, ctx):
         """
@@ -501,7 +482,7 @@ if __name__ == '__main__':
     # main("snoopy_print(2+3);")
     # main("{int x(int a){snoopy_print(a);}x(3);}")
 
-    with open("tests/test.play", "r") as f:
+    with open("tests/function.play", "r") as f:
         script = f.read()
     main(script)
 

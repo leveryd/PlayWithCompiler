@@ -1,0 +1,5 @@
+{
+    if(2){
+        snoopy_print(2);
+    }
+}
