@@ -1,0 +1,54 @@
+{
+    class A{
+        int x = 1+3;
+        int y = 2;
+
+        void z(int num){
+            snoopy_print(num);
+        }
+        void setX(int i){
+            x = i;
+        }
+        B m = B();
+    }
+
+    class B{
+        int x = 0;
+    }
+
+    A a=A();
+
+    // 支持调用类的函数
+    a.z(a.x);     // 4
+
+    // 支持访问和改变类的变量
+    a.x = 1;
+    snoopy_print(a.x + a.y); // 3
+    snoopy_print(a.y); // 2
+
+    // 类和块的作用域互不干扰
+    int x = 1;
+
+    snoopy_print(x);  // 1
+
+    // 支持嵌套调用类
+    snoopy_print(a.m.x);  // 0
+    a.m.x = 5;
+    snoopy_print(a.m.x);  // 5
+
+    // 同一个类的两个实例互不影响
+    A b=A();
+    snoopy_print(b.x);  // 4
+    snoopy_print(a.x);  // 1
+
+    A c;
+    c = a;  // 支持实例的赋值
+    snoopy_print(c.x);  // 1
+    c.x = 2;
+    snoopy_print(a.x);  // 2
+    snoopy_print(c.x);  // 2
+
+    A d = A();
+    d.setX(2);
+    snoopy_print(d.x);  // 2
+}

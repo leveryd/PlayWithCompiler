@@ -29,7 +29,7 @@
         snoopy_print(a);
     }
 
-    x(0);
-    // snoopy_print(y(2));   // 3
-    // z(2);   //  2
+    // x(0);
+    snoopy_print(y(2));   // 3
+    z(2);   //  2
 }
