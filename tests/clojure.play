@@ -1,0 +1,44 @@
+
+/**
+ * clojure.play
+ * 测试闭包特性
+ */
+
+{
+    int a = 0;
+
+    function int() fun1(){        //函数的返回值是一个函数
+        int b;                //函数内的局部变量
+        b = 0;
+
+        int inner(){              //内部的一个函数
+            a = a+1;
+            b = b+1;
+            return b;             //返回内部的成员
+        }
+
+        return inner;             //返回一个函数
+    }
+
+    function int() fun2;
+    fun2 = fun1();
+
+    int result = fun2();
+    snoopy_print(result);   // 1
+
+    result = fun2();
+    snoopy_print(result);   // 2
+
+    snoopy_print(a);   // 2
+
+    function int() fun3;
+    fun3 = fun1();
+
+    result = fun3();
+    snoopy_print(result);  //  1
+    snoopy_print(a);   //  3
+
+    int result1 = fun3();
+    snoopy_print(result1);   // 2
+    snoopy_print(a);  // 4
+}

@@ -13,17 +13,26 @@ class RETURN(object):
         """
         :param value:
         """
+        # value可能是以下类型
+        # Primitive: int, str
+        # Symbol: VariableSymbol  ClassSymbol ClosureFunction ClassField
+        #
+        # 注意 FunctionSymbol 是不可能返回的，如果返回函数，就一定会是 ClosureFunction 类型
+
         self.value = value
 
-
-class ClassField(object):
-    def __init__(self, name, value):
+    def get_value(self):
         """
-        :param name:
-        :param value:
+        在 visitExpression 中
+        :return:
         """
-        self.name = name
-        self.value = value
+        if isinstance(self.value, int) or isinstance(self.value, str):
+            return self.value
+        elif isinstance(self.value, VariableSymbol) or isinstance(self.value, ClassField)\
+                or isinstance(self.value, PrimitiveSymbol):
+            return self.value.value
+        else:
+            return self.value
 
 
 class ClassFunction(object):
@@ -66,6 +75,7 @@ class Scope(object):
     def __init__(self, parent_scope, symbol_list, name=""):
         self.parent_scope = parent_scope
         self.symbol_list = symbol_list
+        self.need_symbol_list = []   # 本作用域内调用的符号列表
         self.name = name
 
     def add_symbol(self, symbol):
@@ -74,6 +84,14 @@ class Scope(object):
         :return:
         """
         self.symbol_list.append(symbol)
+
+    def add_symbol_list(self, symbol_list):
+        """
+        :param symbol_list:
+        :return:
+        """
+        for i in symbol_list:
+            self.add_symbol(copy.copy(i))
 
     def get_symbol_by_name(self, name):
         """
@@ -85,12 +103,52 @@ class Scope(object):
                 return symbol
         return None
 
+    def add_needed_symbol(self, symbol):
+        """
+        :param symbol:
+        :return:
+        """
+        flag = True
+        for i in self.need_symbol_list:  # symbol去重
+            if symbol.name == i.name:
+                flag = False
+        if flag:
+            self.need_symbol_list.append(symbol)
+
+    def __str__(self):
+        return self.name
+
+
+class BlockScope(Scope):
+    index = 0
+
+    def set_name(self, index):
+        self.name = "block" + str(index)
+
     def __str__(self):
         return self.name
 
 
 class Symbol(object):
     pass
+
+
+class PrimitiveSymbol(Symbol):
+    def __init__(self, value):
+        """
+        :param value:
+        """
+        self.value = value
+
+    def get_value(self):
+        """
+        PrimitiveSymbolInstance
+
+        snoopy(PrimitiveSymbolInstance)
+        a = PrimitiveSymbolInstance
+        :return:
+        """
+        return int(self.value)
 
 
 class VariableSymbol(Symbol):
@@ -103,6 +161,25 @@ class VariableSymbol(Symbol):
         self.name = name
         self.value = value
         self.ctx = ctx
+
+    def get_value(self):
+        """
+        PrimitiveSymbolInstance
+
+        snoopy(PrimitiveSymbolInstance)
+        a = PrimitiveSymbolInstance
+        :return:
+        """
+        if isinstance(self.value, int) or isinstance(self.value, str):
+            return self.value
+        if isinstance(self.value, PrimitiveSymbol):
+            return self.value.get_value()
+        elif isinstance(self.value, ClassSymbol):
+            return self.value
+        elif isinstance(self.value, FunctionSymbol):  # a=func  函数赋值
+            return self.value
+        else:
+            raise ValueError("exception")
 
 
 class FunctionSymbol(Symbol):
@@ -118,6 +195,63 @@ class FunctionSymbol(Symbol):
         self.name = name
         self.arguments = arguments
         self.body_ctx = body_ctx
+
+    def compute_self_symbols(self):
+        """
+        计算自己有的符号
+        :return:
+        """
+        scope = NodeScopeMap.get(self.body_ctx.children[0])
+        return scope.symbol_list
+
+    def compute_needed_all_symbols(self):
+        """
+        计算自己需要的所有符号
+        :return:
+        """
+        scope = NodeScopeMap.get(self.body_ctx.children[0])
+        return scope.need_symbol_list
+
+    def compute_needed_symbols(self):
+        """
+        计算需要传给自己的符号
+        这个符号列表在return 闭包函数时返回
+
+        在调用闭包函数时，带上这个符号列表
+        :return:
+        """
+        ret = []
+        for i in self.compute_needed_all_symbols():
+            no_need = False
+            for j in self.compute_self_symbols():
+                if i.name == j.name:
+                    no_need = True
+                    break
+            if no_need is False:
+                ret.append(i)
+        return ret
+
+    def get_value(self):
+        """
+        :return:
+        """
+        return self
+
+
+class ClosureFunction(FunctionSymbol):
+    def __init__(self, function):
+        """
+        :param function: 闭包函数
+        """
+        FunctionSymbol.__init__(self, function.ctx, function.name, function.arguments, function.body_ctx)
+        needed_symbols = function.compute_needed_symbols()
+        current_scope = Annotated.get_stack_top()
+
+        self.closure_variables = []
+        for needed_symbol in needed_symbols:
+            for i in current_scope.symbol_list:
+                if i.name == needed_symbol.name:
+                    self.closure_variables.append(copy.copy(i))
 
 
 class ClassSymbol(Symbol):
@@ -174,15 +308,16 @@ class ClassSymbol(Symbol):
         classes = copy.copy(self.classes)
         return ClassSymbol(ctx, name, functions, fields, classes)
 
+    def get_value(self):
+        return self
 
-class BlockScope(Scope):
-    index = 0
 
-    def set_name(self, index):
-        self.name = "block" + str(index)
-
-    def __str__(self):
-        return self.name
+class ClassField(VariableSymbol):
+    def __init__(self, variable_symbol):
+        """
+        :param variable_symbol:
+        """
+        VariableSymbol.__init__(self, variable_symbol.ctx, variable_symbol.name, variable_symbol.value)
 
 
 class Annotated(object):
@@ -229,6 +364,49 @@ class Annotated(object):
 
 
 class PlayVisitor(PlayScriptVisitor):
+    def call_func(self, symbol, ctx):
+        """
+        :param symbol:
+        :param ctx:
+        :return: None 、 RETURN对象
+        """
+        # symbol 找到的函数符号
+
+        # 1. 计算参数值
+        if ctx.expressionList() is None:  # 没有参数
+            arguments_values = []
+        else:
+            arguments_values = self.visitExpressionList(ctx.expressionList())
+
+        # 2. 生成新的作用域
+        arguments = symbol.arguments
+        for i in range(0, len(arguments)):
+            argument = arguments[i]
+            if isinstance(arguments_values[i], VariableSymbol):
+                v = arguments_values[i].value
+            else:
+                v = arguments_values[i]
+            argument.value = v
+        current_stack_top_scope = Annotated.get_stack_top()  # 当前的作用域当作函数的父域
+
+        # block -> new_scope1 -> function_block -> new_scope2 -> function_block
+        import random
+        r_str = str(random.randint(0, 10000))
+        new_scope = Scope(current_stack_top_scope, [], "call_func_" + r_str)  # 将参数符号放到函数域
+        # new_scope = Scope(current_stack_top_scope, argument, "call_func_" + r_str)  # bug
+
+        new_scope.add_symbol_list(arguments)   # 为了防莫名奇妙的问题
+
+        if isinstance(symbol, ClosureFunction):
+            for i in symbol.closure_variables:   # 将闭包函数需要的参数值也传入
+                new_scope.add_symbol(i)
+
+        # 执行函数
+        Annotated.push_scope(new_scope)
+        ret = self.visitFunctionBody(symbol.body_ctx)
+        Annotated.pop_scope()
+        return ret
+
     def visitIntegerLiteral(self, ctx):
         return int(ctx.getText())
 
@@ -282,17 +460,14 @@ class PlayVisitor(PlayScriptVisitor):
         if ctx.variableInitializer() is not None:
             v = self.visitExpression(ctx.variableInitializer().expression())
         else:
-            v = 0
+            v = PrimitiveSymbol(0)
 
         current_scope = NodeScopeMap.get(ctx)
 
         # 变量带有作用域
         variable_name = ctx.variableDeclaratorId().getText()
         current_symbol = current_scope.get_symbol_by_name(variable_name)
-        current_symbol.value = v
-
-    def visitTypeType(self, ctx):
-        return ctx.primitiveType().getText()
+        current_symbol.value = v.get_value()
 
     def visitStatement(self, ctx):
         """
@@ -306,14 +481,17 @@ class PlayVisitor(PlayScriptVisitor):
                 return RETURN(None)
             else:
                 ret_value = self.visitExpression(ctx.expression())
+
+                if isinstance(ret_value, FunctionSymbol):  # 闭包函数的处理
+                    return RETURN(ClosureFunction(ret_value))
+                # RETURN.value 可能的类型
+                # int, str
+                # Symbol: VariableSymbol FunctionSymbol ClassSymbol ClosureFunction
+
                 return RETURN(ret_value)
         elif ctx.IF() is not None:
             e = self.visitParExpression(ctx.parExpression())
-            if isinstance(e, VariableSymbol):
-                e = int(e.value)
-            else:
-                e = int(e)
-            if e >= 0:
+            if e.get_value() >= 0:
                 return self.visitStatement(ctx.statement()[0])
         else:
             # print(ctx.statementExpression.getText())
@@ -341,26 +519,18 @@ class PlayVisitor(PlayScriptVisitor):
         return ret
 
     def visitExpression(self, ctx):
+        """
+        :param ctx:
+        :return: PrimitiveSymbol ClassField  RETURN RETURN.get_value None
+        """
         if ctx.primary() is not None:
             return self.visitPrimary(ctx.primary())
         elif ctx.bop is not None and ctx.bop.text in ["+", "-", "*", "/"]:
             ll = self.visit(ctx.expression(0))   # 暂时全部当作数字处理
-            if isinstance(ll, VariableSymbol):
-                l_value = int(ll.value)
-            elif isinstance(ll, ClassField):
-                l_value = int(ll.value)
-            else:
-                l_value = int(ll)
 
             rr = self.visit(ctx.expression(1))  # 暂时全部当作数字处理
-            if isinstance(rr, VariableSymbol):
-                r_value = int(rr.value)
-            elif isinstance(rr, ClassField):
-                r_value = int(rr.value)
-            else:
-                r_value = int(rr)
 
-            return eval("%d%s%d" % (l_value, ctx.bop.text, r_value))
+            return PrimitiveSymbol(eval("%d%s%d" % (ll.get_value(), ctx.bop.text, rr.get_value())))
         elif ctx.bop is not None and ctx.bop.text == ".":
             variable = self.visitExpression(ctx.expression()[0])
 
@@ -374,49 +544,52 @@ class PlayVisitor(PlayScriptVisitor):
                     if field.name == ctx.IDENTIFIER().getText():
                         return field  # 返回类的属性
             elif ctx.functionCall() is not None:   # 查找函数
-                for functions in class_instance.functions:
-                    # if functions.name == ctx.IDENTIFIER().getText():
+                # if functions.name == ctx.IDENTIFIER().getText():
 
-                    # 将类的scope压入栈顶，并且field传入实例的值而不是类的值
-                    class_declaration_ctx = class_instance.ctx
-                    class_scope = NodeScopeMap.get(class_declaration_ctx)  # 类的scope
-                    class_instance_scope = Scope(class_scope.parent_scope, [], "class_instance_scope")
-                    for field in class_instance.fields:  # 实例的field
-                        variable_symbol = VariableSymbol(None, field.name, field.value)
-                        class_instance_scope.add_symbol(variable_symbol)
+                # 将类的scope压入栈顶，并且field传入实例的值而不是类的值
+                class_declaration_ctx = class_instance.ctx
+                class_scope = NodeScopeMap.get(class_declaration_ctx)  # 类的scope
+                class_instance_scope = Scope(class_scope.parent_scope, [], "class_instance_scope")
+                for field in class_instance.fields:  # 实例的field
+                    variable_symbol = VariableSymbol(None, field.name, field.value)
+                    class_instance_scope.add_symbol(variable_symbol)
 
-                    for function in class_instance.functions:
-                        function_symbol = FunctionSymbol(None, function.name, function.arguments, function.body_ctx)
-                        class_instance_scope.add_symbol(function_symbol)
+                for function in class_instance.functions:
+                    function_symbol = FunctionSymbol(None, function.name, function.arguments, function.body_ctx)
+                    class_instance_scope.add_symbol(function_symbol)
 
-                    Annotated.push_scope(class_instance_scope)
+                Annotated.push_scope(class_instance_scope)
 
-                    ret = self.visitFunctionCall(ctx.functionCall())  # 调用类的方法
+                ret = self.visitFunctionCall(ctx.functionCall())  # 调用类的方法,ret是RETURN实例
 
-                    # 调用方法后，实例域的值可能会改变。实例域的值更新实例
-                    for field in class_instance.fields:  # 实例的field
-                        for symbol in class_instance_scope.symbol_list:
-                            if isinstance(symbol, VariableSymbol) and symbol.name == field.name:
-                                field.value = symbol.value
+                # 调用方法后，实例域的值可能会改变。实例域的值更新实例
+                for field in class_instance.fields:  # 实例的field
+                    for symbol in class_instance_scope.symbol_list:
+                        if isinstance(symbol, VariableSymbol) and symbol.name == field.name:
+                            field.value = symbol.value
 
-                    Annotated.pop_scope()
-                    return ret
+                Annotated.pop_scope()
+                if ret is None:
+                    return None
+                else:
+                    return ret.get_value()
 
-            return None
+            else:
+                raise ValueError("bad IDENTIFIER")
 
         elif ctx.bop is not None and ctx.bop.text == "=":
             symbol = self.visit(ctx.expression(0))
             ret = self.visit(ctx.expression(1))
-            if isinstance(ret, VariableSymbol):
-                if isinstance(ret.value, ClassSymbol):
-                    symbol.value = ret.value
-                else:
-                    symbol.value = int(ret.value)
-            elif isinstance(ret, str):
-                symbol.value = int(ret)
-            return None
+
+            if isinstance(ret, RETURN):  # 函数的return
+                symbol.value = ret.get_value()
+            else:  # 全部当作Symbol处理
+                symbol.value = ret.get_value()
+
         elif ctx.functionCall() is not None:
             return self.visitFunctionCall(ctx.functionCall())
+        else:
+            raise ValueError("bad expression")
 
     def visitPrimary(self, ctx):
         """
@@ -425,7 +598,8 @@ class PlayVisitor(PlayScriptVisitor):
         :return:
         """
         if ctx.literal() is not None:
-            return ctx.getText()
+            primitive_symbol = PrimitiveSymbol(ctx.getText())
+            return primitive_symbol
         else:  # 暂时全部当作变量
             # 一直向父节点的scope寻找到变量，直到没有父节点
             current_scope = Annotated.get_stack_top()
@@ -454,21 +628,18 @@ class PlayVisitor(PlayScriptVisitor):
         存在一个疑问：课程代码直接 调用visitFunctionDeclaration。那么在函数声明时，为啥不会调用函数中的代码?
         :param ctx:
         :return:
+
+        返回值
+            调用snoopy_print  None
+            没有找到函数  None
+            函数body  RETURN
         """
         if ctx.IDENTIFIER() is not None:
             if ctx.IDENTIFIER().getText() == "snoopy_print":   # 内置的函数
                 ret = self.visitExpressionList(ctx.expressionList())
 
                 if len(ret) == 1:
-                    if isinstance(ret[0], VariableSymbol):
-                        if isinstance(ret[0].value, ClassField):
-                            print(ret[0].value.value)
-                        else:
-                            print(ret[0].value)
-                    elif isinstance(ret[0], ClassField):
-                        print(ret[0].value)
-                    else:
-                        print(ret[0])
+                    print(ret[0].get_value())
                 else:
                     print(tuple(ret))
             else:
@@ -485,35 +656,7 @@ class PlayVisitor(PlayScriptVisitor):
                         if symbol is None:
                             current_scope = current_scope.parent_scope
                         elif isinstance(symbol, FunctionSymbol):
-                            # symbol 找到的函数符号
-
-                            # 1. 计算参数值
-                            if ctx.expressionList() is None:  # 没有参数
-                                arguments_values = []
-                            else:
-                                arguments_values = self.visitExpressionList(ctx.expressionList())
-
-                            # 2. 生成新的作用域
-                            arguments = symbol.arguments
-                            for i in range(0, len(arguments)):
-                                argument = arguments[i]
-                                if isinstance(arguments_values[i], VariableSymbol):
-                                    v = arguments_values[i].value
-                                else:
-                                    v = arguments_values[i]
-                                argument.value = v
-                            current_stack_top_scope = Annotated.get_stack_top()  # 当前的作用域当作函数的父域
-
-                            # block -> new_scope1 -> function_block -> new_scope2 -> function_block
-                            import random
-                            r_str = str(random.randint(0, 10000))
-                            new_scope = Scope(current_stack_top_scope, arguments, "xxx" + r_str)  # 将参数符号放到函数域
-
-                            # 执行函数
-                            Annotated.push_scope(new_scope)
-                            ret = self.visitFunctionBody(symbol.body_ctx)
-                            Annotated.pop_scope()
-                            return ret
+                            return self.call_func(symbol, ctx)
                         elif isinstance(symbol, ClassSymbol):
                             # symbol 找到的类的符号
 
@@ -535,7 +678,7 @@ class PlayVisitor(PlayScriptVisitor):
 
                             for symbol in instance_scope.symbol_list:
                                 if isinstance(symbol, VariableSymbol):
-                                    field = ClassField(symbol.name, symbol.value)
+                                    field = ClassField(symbol)
                                     class_instance.put_field(field)
 
                                 elif isinstance(symbol, FunctionSymbol):
@@ -543,6 +686,14 @@ class PlayVisitor(PlayScriptVisitor):
                                     class_instance.functions.append(class_function)
 
                             return class_instance
+                        # x = y()  y是变量，是闭包函数的返回值
+                        elif isinstance(symbol, VariableSymbol) and isinstance(symbol.value, ClosureFunction):
+                            return self.call_func(symbol.value, ctx)
+                        # x= func  函数赋值，这里的x是一个变量类型，值是一个function
+                        elif isinstance(symbol, VariableSymbol) and isinstance(symbol.value, FunctionSymbol):
+                            return self.call_func(symbol.value, ctx)
+                        else:
+                            raise ValueError("bad symbol")
 
     def visitClassBody(self, ctx):
         """
@@ -628,6 +779,7 @@ class PlayListener(PlayScriptListener):
         # 获取当前scope符号，这里没有
         s = BlockScope(parent_scope, [])
         s.set_name(BlockScope.index)
+
         BlockScope.index += 1
 
         # 塞入 scope 列表
@@ -705,6 +857,16 @@ class PlayListener(PlayScriptListener):
         """
         Annotated.pop_scope()
 
+    def enterPrimary(self, ctx):
+        """
+        :param ctx:
+        :return:
+        """
+        current_scope = Annotated.get_stack_top()
+        if ctx.IDENTIFIER() is not None:
+            variable_symbol = VariableSymbol(ctx,  ctx.IDENTIFIER().getText(), "")
+            current_scope.add_needed_symbol(variable_symbol)
+
 
 def main(line):
     input_stream = InputStream(line)
@@ -722,6 +884,13 @@ def main(line):
     walker = ParseTreeWalker()
     walker.walk(printer, tree)
 
+    # 闭包分析
+    # for k, v in NodeScopeMap.node_scope_list:
+    #     for symbol in v.symbol_list:
+    #         if isinstance(symbol, FunctionSymbol):
+    #             tmp = symbol.compute_needed_symbols()
+    #             print(tmp)
+
     # use customized visitor to traverse AST
     visitor = PlayVisitor()
     return visitor.visit(tree)
@@ -735,7 +904,7 @@ if __name__ == '__main__':
     # main("snoopy_print(2+3);")
     # main("{int x(int a){snoopy_print(a);}x(3);}")
 
-    with open("tests/class.play", "r") as f:
+    with open("tests/if.play", "r") as f:
         script = f.read()
     main(script)
 

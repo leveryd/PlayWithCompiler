@@ -1,0 +1,17 @@
+// 函数作为一等公民
+{
+    int a = 3;
+    int x(int s){
+        snoopy_print(s);
+    }
+
+    int call_dynamic(function int(int) p,int a){
+        p(a);
+    }
+
+    function int(int) y;
+    y = x;  // 函数用于赋值
+    y(1);
+
+    call_dynamic(y, 2);  //  函数当作参数传递
+}
