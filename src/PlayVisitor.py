@@ -1,6 +1,6 @@
 # coding:utf-8
 from dist.PlayScriptVisitor import PlayScriptVisitor
-from src.TypeAndScope import *
+from src.DataStructures import *
 
 
 class PlayVisitor(PlayScriptVisitor):
@@ -107,7 +107,11 @@ class PlayVisitor(PlayScriptVisitor):
         # 变量带有作用域
         variable_name = ctx.variableDeclaratorId().getText()
         current_symbol = current_scope.get_symbol_by_name(variable_name)
-        current_symbol.value = v.get_value()
+
+        if isinstance(v, PrimitiveSymbol):
+            current_symbol.value = v  # 取真实值
+        else:
+            current_symbol.value = v.get_value()   # 取值，而不是取地址
 
     def visitStatement(self, ctx):
         """
@@ -170,7 +174,7 @@ class PlayVisitor(PlayScriptVisitor):
 
             rr = self.visit(ctx.expression(1))  # 暂时全部当作数字处理
 
-            return PrimitiveSymbol(eval("%d%s%d" % (ll.get_value(), ctx.bop.text, rr.get_value())))
+            return PrimitiveSymbol(eval("%s%s%s" % (ll.get_value(), ctx.bop.text, rr.get_value())))
         elif ctx.bop is not None and ctx.bop.text == ".":
             variable = self.visitExpression(ctx.expression()[0])
 
@@ -298,7 +302,7 @@ class PlayVisitor(PlayScriptVisitor):
                         elif isinstance(symbol, FunctionSymbol):
                             return self.call_func(symbol, ctx)
                         elif isinstance(symbol, ClassSymbol):
-                            # symbol 找到的类的符号
+                            # symbol是找到的类的符号
 
                             # 1. 调用类的构造函数
                             # 创建新的scope
@@ -309,11 +313,18 @@ class PlayVisitor(PlayScriptVisitor):
                             class_declare_ctx = class_instance.ctx
 
                             class_scope = NodeScopeMap.get(class_declare_ctx)
-
                             instance_scope = copy.copy(class_scope)
                             # 访问类body中的statement
+                            # 递归访问父类的body中的statement，支持继承
                             Annotated.push_scope(instance_scope)
-                            self.visitClassBody(class_declare_ctx.classBody())
+                            tmp_class_declare_ctx = class_declare_ctx
+                            while True:
+                                self.visitClassBody(tmp_class_declare_ctx.classBody())
+                                if tmp_class_declare_ctx.typeType() is not None:
+                                    parent_class_symbol = NodeAndType.get_type_of_node(tmp_class_declare_ctx.typeType())
+                                    tmp_class_declare_ctx = parent_class_symbol.ctx
+                                else:
+                                    break
                             Annotated.pop_scope()
 
                             for symbol in instance_scope.symbol_list:
@@ -322,8 +333,9 @@ class PlayVisitor(PlayScriptVisitor):
                                     class_instance.put_field(field)
 
                                 elif isinstance(symbol, FunctionSymbol):
-                                    class_function = ClassFunction(symbol.name, symbol.arguments, symbol.body_ctx)
-                                    class_instance.functions.append(class_function)
+                                    class_function = ClassFunction(symbol.ctx,
+                                                                   symbol.name, symbol.arguments, symbol.body_ctx)
+                                    class_instance.put_function(class_function)
 
                             return class_instance
                         # x = y()  y是变量，是闭包函数的返回值

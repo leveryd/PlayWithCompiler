@@ -1,0 +1,11 @@
+{
+    class A{
+        int a=0;
+        void b(){
+            a = a+1;
+        }
+    }
+    A a=A();
+    a.b();
+    snoopy_print(a.a);
+}

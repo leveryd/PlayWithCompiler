@@ -1,0 +1,21 @@
+{
+    class A{
+        void p(){}
+    }
+    class B extends A{
+        void p(){
+            snoopy_print(1111);
+        }
+    }
+
+    class C extends A{
+        void p(){
+            snoopy_print(2222);
+        }
+    }
+
+    A a;
+    a=A();
+    a.p();
+
+}

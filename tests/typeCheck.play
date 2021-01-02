@@ -1,0 +1,19 @@
+{
+    class A {
+        int a=1;
+
+        function int(int) f(){
+           a = a + 1;
+           int b(int c){
+                a = a + 1;
+                return c;
+           }
+           return b;
+        }
+    }
+    A a=A();
+
+    function int(int) c=a.f();
+    int d=c(2);
+    snoopy_print(d);
+}
